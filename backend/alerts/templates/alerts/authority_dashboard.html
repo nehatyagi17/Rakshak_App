@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAKSHAK | Authority Command Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&display=swap');
+        body { font-family: 'Space+Grotesk', sans-serif; background-color: #05070A; color: #E2E8F0; }
+        .glass-panel { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        #map { height: 100%; width: 100%; border-radius: 1rem; }
+        .pulse-red { animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 38, 38, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); } }
+    </style>
+</head>
+<body class="h-screen overflow-hidden flex flex-col">
+
+    <!-- Siren Audio -->
+    <audio id="siren" loop src="https://www.soundjay.com/buttons/sounds/beep-01a.mp3"></audio>
+
+    <!-- Header -->
+    <header class="h-16 flex items-center px-8 glass-panel border-b border-white/10 z-50">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center font-bold text-white">R</div>
+            <h1 class="text-xl font-bold tracking-widest text-white">RAKSHAK <span class="text-red-500 font-light">COMMAND</span></h1>
+        </div>
+        <div class="ml-auto flex items-center gap-6">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                <span class="text-xs font-bold text-green-500 uppercase tracking-tighter">System Live</span>
+            </div>
+            <div id="connection-status" class="text-xs text-slate-400 font-mono">WS: CONNECTING...</div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden p-4 gap-4">
+        
+        <!-- Map Section -->
+        <section class="flex-1 glass-panel rounded-2xl relative overflow-hidden">
+            <div id="map"></div>
+            <div id="alert-banner" class="hidden absolute top-6 left-1/2 -translate-x-1/2 z-[1000] bg-red-600 text-white px-8 py-3 rounded-full font-black tracking-widest pulse-red flex items-center gap-4">
+                <span class="animate-ping w-3 h-3 bg-white rounded-full"></span>
+                ACTIVE DISTRESS SIGNAL DETECTED
+            </div>
+        </section>
+
+        <!-- Intelligence Sidebar -->
+        <aside class="w-96 flex flex-col gap-4">
+            
+            <!-- Video Intel -->
+            <div class="h-1/2 glass-panel rounded-2xl p-6 flex flex-col overflow-hidden">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    Live Evidence Stream
+                </h2>
+                <div class="flex-1 bg-black rounded-lg overflow-hidden relative group">
+                    <video id="live-player" class="w-full h-full bg-slate-900" crossorigin="anonymous"></video>
+                    <div id="buffer-status" class="absolute inset-0 flex items-center justify-center bg-black/60 hidden">
+                        <span class="text-xs font-bold tracking-widest text-white animate-pulse">BUFFERING NEXT SEGMENT...</span>
+                    </div>
+                </div>
+                <div class="mt-4 flex justify-between items-center bg-slate-800/50 p-2 rounded text-[10px] font-mono">
+                    <span class="text-slate-400">FPS: 30 | RES: 720p</span>
+                    <span id="video-timer" class="text-red-500">OFFLINE</span>
+                </div>
+            </div>
+
+            <!-- Event Log -->
+            <div class="flex-1 glass-panel rounded-2xl p-6 flex flex-col overflow-hidden">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Evidence Registry</h2>
+                <div id="incident-log" class="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+                    <div class="text-center py-10 text-slate-600 text-xs italic">Waiting for active signals...</div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <script>
+        const siren = document.getElementById('siren');
+        const map = L.map('map', { zoomControl: false }).setView([28.6139, 77.2090], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CartoDB'
+        }).addTo(map);
+
+        let victimMarker = null;
+        let polyline = L.polyline([], {color: '#ef4444', weight: 4, opacity: 0.8}).addTo(map);
+        let videoQueue = [];
+        let isPlaying = false;
+        const videoElement = document.getElementById('live-player');
+
+        // Initial Load of Active Alerts
+        async function fetchInitialAlerts() {
+            try {
+                // SessionAuthentication handles the cookies automatically now
+                const response = await fetch('/api/alerts/admin/list/');
+                if (response.ok) {
+                    const alerts = await response.json();
+                    if (alerts.length > 0) {
+                        alerts.forEach(handleSOSStart);
+                    }
+                }
+            } catch (e) { 
+                console.error("Dashboard Sync Failed", e); 
+            }
+        }
+
+        // WebSocket Setup
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/authority/`;
+        const socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            document.getElementById('connection-status').innerText = 'WS: CONNECTED';
+            document.getElementById('connection-status').className = 'text-xs text-green-500 font-mono';
+        };
+
+        socket.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            console.log("Authority Event:", data);
+
+            if (data.type === 'SOS_START') {
+                handleSOSStart(data);
+            } else if (data.type === 'NEW_CHUNK') {
+                handleNewChunk(data);
+            }
+        };
+
+        socket.onerror = () => {
+            document.getElementById('connection-status').innerText = 'WS: ERROR / FALLING BACK';
+            document.getElementById('connection-status').className = 'text-xs text-yellow-500 font-mono';
+            startPollingFallback();
+        };
+
+        function startPollingFallback() {
+            console.warn("Starting Polling Fallback...");
+            setInterval(fetchInitialAlerts, 5000);
+        }
+
+        let playedChunks = new Set();
+
+        function handleSOSStart(data) {
+            document.getElementById('alert-banner').classList.remove('hidden');
+            siren.play();
+            
+            const pos = [data.lat, data.lng];
+            map.setView(pos, 16);
+            
+            if (victimMarker) map.removeLayer(victimMarker);
+            victimMarker = L.circleMarker(pos, {
+                radius: 10,
+                fillColor: "#ef4444",
+                color: "#fff",
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.8
+            }).addTo(map);
+            
+            polyline.addLatLng(pos);
+
+            logEvent(`SOS TRIGGERED: ${data.victim_name || 'A Rakshak User'}`, 'SOS_START');
+
+            // Handle Video Chunk from Polling/Initial Load
+            if (data.latest_chunk_url && !playedChunks.has(data.latest_chunk_url)) {
+                handleNewChunk({ chunk_url: data.latest_chunk_url, sequence: 'Live' });
+            }
+        }
+
+        function handleNewChunk(data) {
+            if (!data.chunk_url || playedChunks.has(data.chunk_url)) return;
+            playedChunks.add(data.chunk_url);
+
+            if (data.lat && data.lng) {
+                const pos = [data.lat, data.lng];
+                polyline.addLatLng(pos);
+                if (victimMarker) victimMarker.setLatLng(pos);
+                map.panTo(pos);
+            }
+
+            videoQueue.push(data.chunk_url);
+            if (!isPlaying) playNextChunk();
+
+            const seq = data.sequence || 'Live';
+            logEvent(`Evidence Chunk #${seq} Received`, 'VIDEO', data.chunk_url);
+        }
+
+        fetchInitialAlerts();
+
+        function playNextChunk() {
+            if (videoQueue.length === 0) {
+                isPlaying = false;
+                document.getElementById('buffer-status').classList.add('hidden');
+                document.getElementById('video-timer').innerText = 'STANDBY';
+                return;
+            }
+
+            isPlaying = true;
+            const nextUrl = videoQueue.shift();
+            videoElement.src = nextUrl;
+            videoElement.play();
+            document.getElementById('video-timer').innerText = 'LIVE';
+        }
+
+        videoElement.onended = () => {
+            playNextChunk();
+        };
+
+        videoElement.onerror = () => {
+             console.error("Video Playback Error");
+             playNextChunk();
+        };
+
+        function logEvent(message, type, url = null) {
+            const container = document.getElementById('incident-log');
+            if (container.children[0]?.classList.contains('italic')) container.innerHTML = '';
+
+            const div = document.createElement('div');
+            div.className = "bg-slate-800/40 border-l-2 border-slate-600 p-3 rounded-r-lg text-[11px] font-mono group hover:bg-slate-700/60 transition-colors cursor-pointer";
+            
+            let icon = '⏺';
+            let color = 'text-slate-400';
+            if (type === 'SOS_START') { icon = '🚨'; color = 'text-red-500 font-bold border-red-600'; }
+            if (type === 'VIDEO') { icon = '🎥'; }
+
+            div.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="${color}">${icon} ${type}</span>
+                    <span class="opacity-40">${new Date().toLocaleTimeString()}</span>
+                </div>
+                <p class="text-slate-300">${message}</p>
+            `;
+
+            if (url) {
+                div.onclick = () => {
+                    videoElement.src = url;
+                    videoElement.play();
+                    isPlaying = true; // Interrupt live for review
+                };
+            }
+
+            container.prepend(div);
+        }
+    </script>
+</body>
+</html>

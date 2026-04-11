@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rakshak Admin Dashboard | Real-Time Safety Tracking</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        :root {
+            --primary: #FF3B30;
+            --primary-dark: #D70015;
+            --bg-dark: #0A0A0A;
+            --card-bg: #1C1C1E;
+            --text-main: #FFFFFF;
+            --text-dim: #8E8E93;
+            --success: #34C759;
+            --warning: #FF9500;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Sidebar Styling */
+        .sidebar {
+            width: 320px;
+            background-color: var(--card-bg);
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            z-index: 1000;
+            box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 40px;
+        }
+
+        .brand-logo {
+            width: 32px;
+            height: 32px;
+            background-color: var(--primary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            box-shadow: 0 0 15px var(--primary);
+        }
+
+        .stats-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stat-val {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .alert-list-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .alert-items {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .alert-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 12px;
+            border: 1px solid transparent;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .alert-card:hover {
+            border-color: var(--primary);
+            background: rgba(255, 59, 48, 0.05);
+        }
+
+        .victim-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .threat-tag {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .tag-high { background: var(--primary); color: white; }
+        .tag-med { background: var(--warning); color: black; }
+        .tag-low { background: var(--success); color: white; }
+
+        /* Map Container */
+        #map {
+            flex: 1;
+            background-color: #111;
+        }
+
+        /* Marker Customization */
+        .leaflet-popup-content-wrapper {
+            background: var(--card-bg);
+            color: white;
+            border-radius: 12px;
+            padding: 8px;
+        }
+        .leaflet-popup-tip { background: var(--card-bg); }
+
+        .popup-victim {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }
+
+        .pulse {
+            width: 20px;
+            height: 20px;
+            background: var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 0 0 rgba(255, 59, 48, 0.4);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); }
+        }
+
+        .no-alerts {
+            text-align: center;
+            color: var(--text-dim);
+            margin-top: 40px;
+            font-size: 14px;
+        }
+
+        /* Login Overlay */
+        #login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.9);
+            z-index: 9999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .login-card {
+            background: var(--card-bg);
+            padding: 32px;
+            border-radius: 20px;
+            width: 380px;
+            border: 1px solid rgba(255,255,255,0.1);
+            text-align: center;
+        }
+
+        .login-card h2 { margin-bottom: 24px; color: var(--primary); }
+        .login-input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            margin-bottom: 16px;
+            color: white;
+            font-size: 14px;
+        }
+        .login-btn {
+            width: 100%;
+            padding: 12px;
+            background: var(--primary);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .login-btn:active { transform: scale(0.98); }
+        .error-msg { font-size: 12px; color: var(--primary); margin-top: 12px; display: none; }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-logo">R</div>
+            <h2>RAKSHAK</h2>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-val" id="active-count">{{ total_active }}</div>
+                <div class="stat-label">Active Alerts</div>
+            </div>
+        </div>
+
+        <div class="alert-list-header">
+            <span>LIVE FEED</span>
+            <span style="color: var(--primary); font-size: 10px;">● RECORDING</span>
+        </div>
+
+        <div class="alert-items" id="alert-list">
+            <div class="no-alerts">Waiting for incoming SOS signals...</div>
+        </div>
+    </aside>
+
+    <main id="map"></main>
+
+    <!-- Login Overlay -->
+    <div id="login-overlay">
+        <div class="login-card">
+            <div class="brand">
+                <div class="brand-logo">R</div>
+                <h2>Admin Login</h2>
+            </div>
+            <input type="email" id="email" class="login-input" placeholder="Email Address (admin@rakshak.system)">
+            <input type="password" id="password" class="login-input" placeholder="Password (admin123)">
+            <button class="login-btn" onclick="handleLogin()">ACCESS DASHBOARD</button>
+            <div id="login-error" class="error-msg">❌ Invalid credentials or not an admin</div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // Use a high-quality dark tile layer (CartoDB Dark Matter)
+        const map = L.map('map', {
+            zoomControl: false
+        }).setView([20.5937, 78.9629], 5); // Default to India center
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CartoDB'
+        }).addTo(map);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        let markers = {};
+        let activeAlerts = [];
+
+        async function fetchAlerts() {
+            const token = localStorage.getItem('rakshak_admin_token');
+            if (!token) {
+                document.getElementById('login-overlay').style.display = 'flex';
+                return;
+            }
+
+            try {
+                const response = await fetch('/alerts/admin/list/', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('rakshak_admin_token');
+                    document.getElementById('login-overlay').style.display = 'flex';
+                    return;
+                }
+
+                if (!response.ok) throw new Error('Auth failed or server down');
+                
+                const data = await response.json();
+                updateDashboard(data);
+            } catch (err) {
+                console.error('Error fetching alerts:', err);
+            }
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorEl = document.getElementById('login-error');
+            const loginBtn = document.querySelector('.login-btn');
+            
+            errorEl.style.display = 'none';
+            loginBtn.innerText = 'CONNECTING...';
+            loginBtn.disabled = true;
+            
+            try {
+                console.log('Attempting login to /api/auth/login/ ...');
+                const response = await fetch('/api/auth/login/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                console.log('Login Response:', response.status, data);
+                
+                if (response.ok && data.access) {
+                    localStorage.setItem('rakshak_admin_token', data.access);
+                    document.getElementById('login-overlay').style.display = 'none';
+                    loginBtn.innerText = 'ACCESS DASHBOARD';
+                    loginBtn.disabled = false;
+                    fetchAlerts();
+                } else {
+                    errorEl.style.display = 'block';
+                    errorEl.innerText = '❌ ' + (data.error || 'Unauthorized Access');
+                    loginBtn.innerText = 'ACCESS DASHBOARD';
+                    loginBtn.disabled = false;
+                }
+            } catch (err) {
+                console.error('Login Error:', err);
+                errorEl.style.display = 'block';
+                errorEl.innerText = '❌ Backend connection error. Check if server is running.';
+                loginBtn.innerText = 'ACCESS DASHBOARD';
+                loginBtn.disabled = false;
+            }
+        }
+
+        function updateDashboard(alerts) {
+            activeAlerts = alerts;
+            const listEl = document.getElementById('alert-list');
+            const countEl = document.getElementById('active-count');
+            countEl.innerText = alerts.length;
+
+            if (alerts.length === 0) {
+                listEl.innerHTML = '<div class="no-alerts">Currently no active distress signals.</div>';
+                // Clear map
+                Object.values(markers).forEach(m => m.remove());
+                markers = {};
+                return;
+            }
+
+            // Sync List
+            listEl.innerHTML = '';
+            alerts.forEach(alert => {
+                const card = document.createElement('div');
+                card.className = 'alert-card';
+                card.onclick = () => focusAlert(alert);
+                
+                const time = new Date(alert.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const threatClass = alert.threat_level === 'HIGH' ? 'tag-high' : (alert.threat_level === 'MEDIUM' ? 'tag-med' : 'tag-low');
+
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span class="threat-tag ${threatClass}">${alert.threat_level}</span>
+                        <span style="font-size: 10px; color: var(--text-dim)">${time}</span>
+                    </div>
+                    <div class="victim-name">${alert.user_name}</div>
+                    <div style="font-size: 11px; color: var(--text-dim)">📍 Latitude: ${parseFloat(alert.lat).toFixed(4)}, Longitude: ${parseFloat(alert.lng).toFixed(4)}</div>
+                `;
+                listEl.appendChild(card);
+
+                // Sync Markers
+                if (!markers[alert._id]) {
+                    const customIcon = L.divIcon({
+                        className: 'custom-pulse-icon',
+                        html: '<div class="pulse"></div>',
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    });
+
+                    const marker = L.marker([alert.lat, alert.lng], { icon: customIcon })
+                        .addTo(map)
+                        .bindPopup(`
+                            <div class="popup-victim">${alert.user_name}</div>
+                            <div style="font-size: 11px; color: var(--text-dim)">Status: <span style="color: var(--primary)">ACTIVE SOS</span></div>
+                            <div style="font-size: 11px; margin-top: 4px;">THREAT: ${alert.threat_level}</div>
+                            <div style="font-size: 10px; margin-top: 8px; color: #888">Location: ${alert.lat}, ${alert.lng}</div>
+                        `);
+                    markers[alert._id] = marker;
+                    
+                    // Auto-focus on new high-threat alerts
+                    if (alert.threat_level === 'HIGH' || alerts.length === 1) {
+                        focusAlert(alert);
+                    }
+                } else {
+                    const oldLatLng = markers[alert._id].getLatLng();
+                    if (oldLatLng.lat !== alert.lat || oldLatLng.lng !== alert.lng) {
+                        markers[alert._id].setLatLng([alert.lat, alert.lng]);
+                        // If it's the only alert or specifically selected, follow it
+                        if (alerts.length === 1) {
+                            map.panTo([alert.lat, alert.lng]);
+                        }
+                    }
+                }
+            });
+
+            // Cleanup old markers
+            const currentIds = alerts.map(a => a._id);
+            Object.keys(markers).forEach(id => {
+                if (!currentIds.includes(id)) {
+                    markers[id].remove();
+                    delete markers[id];
+                }
+            });
+        }
+
+        function focusAlert(alert) {
+            map.flyTo([alert.lat, alert.lng], 15, { duration: 1.5 });
+            markers[alert._id].openPopup();
+        }
+
+        // Initial fetch and set interval
+        fetchAlerts();
+        setInterval(fetchAlerts, 5000); // 5 second polling for live feel
+    </script>
+</body>
+</html>
