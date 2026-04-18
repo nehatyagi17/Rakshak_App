@@ -16,6 +16,10 @@ import speech_recognition as sr
 import io
 import imageio_ffmpeg
 import subprocess
+import os
+from alerts.biometric_engine import BiometricEngine
+import tempfile
+from core.supabase_bucket_helper import SupabaseBucketHelper
 
 logger = logging.getLogger('django')
 
@@ -178,6 +182,7 @@ class ProfileView(APIView):
         if 'location' in data: update_fields['location'] = data['location']
         if 'biometric_vector' in data: update_fields['biometric_vector'] = data['biometric_vector']
         if 'safety_keyword' in data: update_fields['safety_keyword'] = data['safety_keyword']
+        if 'trust_contacts' in data: update_fields['trust_contacts'] = data['trust_contacts']
         
         if not update_fields:
             return Response({"error": "No update fields provided"}, status=status.HTTP_400_BAD_REQUEST)
@@ -197,6 +202,62 @@ class ProfileView(APIView):
                 logger.error(f"Sync error for safety_keyword: {e}")
             
         return Response({"message": "Profile updated successfully"}, status=status.HTTP_200_OK)
+
+
+class FaceEnrollView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user_email = request.user.email.strip().lower()
+        image_file = request.FILES.get('image')
+        
+        if not image_file:
+            return Response({"error": "Image file is required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            # Save the uploaded file to a temporary location for DeepFace
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                for chunk in image_file.chunks():
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+                
+            # Extract embedding
+            engine = BiometricEngine()
+            embedding = engine.extract_embedding(tmp_path)
+            
+            # --- SUPABASE INTEGRATION ---
+            # Upload the photo as the 'master_face'
+            storage_file_name = f"enrollments/{user_email.replace('@', '_')}_master.jpg"
+            biometric_url = SupabaseBucketHelper.upload_biometric(tmp_path, storage_file_name)
+            
+            # Cleanup temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+                
+            if embedding is None:
+                return Response({
+                    "error": "Face detection failed. Ensure your face is clear and visible."
+                }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+                
+            # Save to MongoDB
+            users_col.update_one(
+                {"email": user_email},
+                {"$set": {
+                    "biometric_vector": embedding,
+                    "biometric_image_url": biometric_url
+                }}
+            )
+            
+            logger.info(f" [FACIAL-ENROLL] User {user_email} enrolled successfully. Photo stored at Supabase.")
+            return Response({
+                "message": "Face registered successfully",
+                "biometric_vector": embedding,
+                "biometric_image_url": biometric_url
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f" [FACIAL-ENROLL] Error: {e}")
+            return Response({"error": "Internal server error during biometric processing"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class UpdateLocationView(APIView):

@@ -30,6 +30,7 @@ import MapView, { Marker } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { SOSManager } from './components/SOSManager';
+import { SafeRouteMap } from './components/SafeRouteMap';
 import { CameraType } from 'expo-camera';
 
 const { width, height } = Dimensions.get('window');
@@ -76,7 +77,7 @@ Notifications.setNotificationHandler({
   }),
 });
 
-type ScreenState = 'login' | 'register' | 'voice_setup' | 'contacts_setup' | 'biometric_enrollment' | 'home';
+type ScreenState = 'login' | 'register' | 'voice_setup' | 'contacts_setup' | 'biometric_enrollment' | 'home' | 'route_map';
 
 // --- REUSABLE COMPONENTS ---
 const ScreenWrapper = ({ children, visible, delay = 0 }: { children: React.ReactNode, visible: boolean, delay?: number }) => {
@@ -146,6 +147,7 @@ export default function App() {
   const emergencyTokenRef = useRef<string | null>(null);
   const activeAlertIdRef = useRef<string | null>(null);
   const evidenceCameraRef = useRef<CameraView>(null);
+  const biometricCameraRef = useRef<CameraView>(null);
 
   // WebSocket Integration
   const [ws, setWs] = useState<WebSocket | null>(null);
@@ -562,13 +564,13 @@ export default function App() {
   };
 
   const escalateSOS = async (stage: 'guardian' | 'community' | 'all') => {
-
-    if (!activeAlertId || isEscalating.current) return;
+    const currentAlertId = activeAlertIdRef.current || activeAlertId;
+    if (!currentAlertId || isEscalating.current) return;
     isEscalating.current = true;
     try {
       console.log(` RAKSHAK: Executing SOS Escalation [STAGE: ${stage}]`);
       await axios.post(`${API_BASE}/alerts/verify/`, { 
-        alert_id: activeAlertId, 
+        alert_id: currentAlertId, 
         stage: stage 
       }, {
         headers: { Authorization: `Bearer ${authToken}` }
@@ -684,14 +686,22 @@ export default function App() {
   };
 
   const startSOS = async () => {
+    // SECURITY UPGRADE: Manual SOS now enters countdown phase first
+    setIsSOSCountdown(true);
+  };
+
+  const executeSOSHandover = async () => {
     setIsSOSCountdown(false);
     triggerAuthorityHandover();
   };
 
   const cancelSOS = async () => {
-    setIsSOSCountdown(false);
-    await AsyncStorage.removeItem('RAKSHAK_ACTIVE_SOS');
-    console.log(" SOS EXITED: User manually verified safety.");
+    // SECURITY UPGRADE: Do not cancel immediately. 
+    // Trigger Biometric Identity Challenge first.
+    console.log(" RAKSHAK: SOS Cancellation Requested. Challenging Identity...");
+    setIsSOSCountdown(false); // Hide countdown so camera is visible
+    setBiometricStatus("Scanning for Authorized Owner...");
+    setIsBiometricActive(true);
   };
 
   const triggerAuthorityHandover = async () => {
@@ -807,8 +817,10 @@ export default function App() {
   };
 
   const stopSOS = async () => {
-    // SECURITY REMOVED: User requested no authentication for stopping SOS in this phase.
-    resolveSOSAfterVerify();
+    // SECURITY RESTORED: Challenge identity before resolving active SOS
+    console.log(" RAKSHAK: Active SOS Stop Requested. Challenging Identity...");
+    setBiometricStatus("Scanning for Authorized Owner...");
+    setIsBiometricActive(true);
   };
 
   const resolveSOSAfterVerify = async () => {
@@ -891,6 +903,66 @@ export default function App() {
     }
   };
 
+  const handleBiometricCapture = async () => {
+    if (!biometricCameraRef.current) return;
+    const isEnrollment = currentScreen === 'biometric_enrollment';
+    setBiometricStatus(isEnrollment ? "Registering Faceprint..." : "Capturing...");
+    
+    try {
+      const photo = await biometricCameraRef.current.takePictureAsync({
+        quality: 0.3,
+        base64: false
+      });
+
+      if (!photo) throw new Error("Camera capture failed");
+
+      setBiometricStatus(isEnrollment ? "Saving Master Face..." : "Verifying Identity...");
+      
+      const formData = new FormData();
+      // @ts-ignore
+      formData.append('image', {
+        uri: photo.uri,
+        name: isEnrollment ? 'enrollment.jpg' : 'verification.jpg',
+        type: 'image/jpeg'
+      });
+
+      const endpoint = isEnrollment ? '/profile/face-enroll/' : '/alerts/verify-biometric/';
+      const res = await axios.post(`${API_BASE}${endpoint}`, formData, {
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          Authorization: `Bearer ${authToken}` 
+        }
+      });
+
+      if (isEnrollment) {
+        setBiometricStatus("Enrolled!");
+        setTimeout(() => {
+          Alert.alert("Success", "Your faceprint has been securely registered.");
+          if (res.data.biometric_vector) setFaceVector(res.data.biometric_vector);
+          setIsBiometricActive(false);
+          navigate('home');
+        }, 800);
+      } else {
+        if (res.data.verified) {
+          setBiometricStatus("Confirmed!");
+          setTimeout(() => {
+            Alert.alert("Verified", "Your safety has been confirmed.");
+            resolveSOSAfterVerify();
+            setIsBiometricActive(false);
+          }, 800);
+        } else {
+          throw new Error(res.data.error || "Match Failed");
+        }
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.message || "Retry Scan";
+      setBiometricStatus("Failed");
+      Alert.alert("Security Check", msg, [
+        { text: "Retry", onPress: () => setBiometricStatus("Ready for Scan") }
+      ]);
+    }
+  };
+
   return (
     <View style={styles.appContainer}>
       <StatusBar barStyle="light-content" />
@@ -953,10 +1025,8 @@ export default function App() {
                      console.warn(" Biometric Missing: Forcing Enrollment Wizard");
                      navigate('biometric_enrollment');
                   } else {
-                     console.log(" Biometric Active: Challenging Identity Proof");
-                     // We don't navigate home yet. We trigger the overlay.
-                     setBiometricStatus("Scanning Face ID...");
-                     setIsBiometricActive(true);
+                     console.log(" RAKSHAK: Login Complete. Vault Open.");
+                     navigate('home');
                   }
                 } catch (e: any) { 
                   console.error(` RAKSHAK: Login FAILED at ${loginUrl}`);
@@ -1082,31 +1152,50 @@ export default function App() {
               else if (!guardian.email && guardian.name && guardian.phone) {
                  Alert.alert("Legacy Setup", "Automation requires an email. Continue with local SMS protocol only?", [
                    { text: "Add Email", style: 'cancel' },
-                   { text: "Use Local SMS", onPress: () => navigate('home') }
+                    { text: "Use Local SMS", onPress: () => navigate('biometric_enrollment') }
                  ]);
               }
               else Alert.alert("Protocol Missing", "Please define a guardian.");
             }}
           >
-            <Text style={styles.btnText}>ACTIVATE BEACON</Text>
+            <Text style={styles.btnText}>SAVE GUARDIAN</Text>
           </TouchableOpacity>
         </View>
+      </ScreenWrapper>
+
+      {/* --- SAFE ROUTE MAP SCREEN --- */}
+      <ScreenWrapper visible={currentScreen === 'route_map'}>
+        <SafeRouteMap 
+          authToken={authToken || ''} 
+          apiBase={API_BASE} 
+          onBack={() => navigate('home')} 
+          theme={THEME}
+        />
       </ScreenWrapper>
 
       {/* --- HOME / SOS DASHBOARD --- */}
       <ScreenWrapper visible={currentScreen === 'home'}>
         <View style={styles.dashboard}>
           <View style={styles.dashHeader}>
-            <View>
-              <Text style={styles.dashTitle}>RAKSHAK</Text>
-              <View style={styles.statusRow}>
-                <View style={styles.statusDot} /><Text style={styles.statusLabel}>SECURED SESSION</Text>
-                {isSimulated && (
-                  <View style={[styles.statusRow, { marginLeft: 10 }]}>
-                    <MaterialCommunityIcons name="test-tube" color={THEME.warning} size={12} />
-                    <Text style={[styles.statusLabel, { color: THEME.warning, marginLeft: 4 }]}>SIMULATION MODE</Text>
-                  </View>
-                )}
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity 
+                onPress={() => navigate('route_map')}
+                style={{ marginRight: 15, backgroundColor: 'rgba(124, 58, 237, 0.1)', padding: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(124, 58, 237, 0.2)' }}
+              >
+                <MaterialCommunityIcons name="map-marker-path" color={THEME.primary} size={24} />
+              </TouchableOpacity>
+              <View>
+                <Text style={styles.dashTitle}>RAKSHAK</Text>
+                <View style={styles.statusRow}>
+                  <View style={styles.statusDot} />
+                  <Text style={styles.statusLabel}>SECURED SESSION</Text>
+                  {isSimulated && (
+                    <View style={[styles.statusRow, { marginLeft: 10 }]}>
+                      <MaterialCommunityIcons name="test-tube" color={THEME.warning} size={12} />
+                      <Text style={[styles.statusLabel, { color: THEME.warning, marginLeft: 4 }]}>SIMULATION MODE</Text>
+                    </View>
+                  )}
+                </View>
               </View>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
@@ -1176,6 +1265,15 @@ export default function App() {
                   <MaterialCommunityIcons name="broadcast" color="#FFF" size={40} style={styles.sosIcon} />
                   <Text style={styles.sosMainText}>SOS</Text>
                 </TouchableOpacity>
+
+                {/* --- TEST BIOMETRICS BUTTON --- */}
+                <TouchableOpacity 
+                  style={styles.testBioBtn}
+                  onPress={handleTestBiometric}
+                >
+                   <MaterialCommunityIcons name="face-recognition" color={THEME.textDim} size={20} />
+                   <Text style={styles.testBioText}>TEST VERIFICATION</Text>
+                </TouchableOpacity>
               </>
             )}
           </View>
@@ -1193,10 +1291,11 @@ export default function App() {
             </View>
           </View>
 
-          <View style={styles.guardianStrip}>
-            <MaterialCommunityIcons name="check-circle-outline" color={THEME.success} size={20} />
+          <TouchableOpacity activeOpacity={0.8} style={styles.guardianStrip} onPress={() => navigate('contacts_setup')}>
+            <MaterialCommunityIcons name="shield-account" color={THEME.success} size={20} />
             <Text style={styles.guardianText}>Guardian {guardian.name || 'Set'} is synced</Text>
-          </View>
+            <MaterialCommunityIcons name="pencil" color={THEME.success} size={16} style={{ marginLeft: 'auto', marginRight: 10 }} />
+          </TouchableOpacity>
 
           {/* --- HELP IS COMING (Victim Panic Reduction) --- */}
           {isAlertActive && comingVolunteers.length > 0 && (
@@ -1252,17 +1351,25 @@ export default function App() {
       {isSOSCountdown && (
         <SOSManager 
            onCancel={cancelSOS} 
-           onTimerEnd={startSOS} 
+           onTimerEnd={executeSOSHandover} 
         />
       )}
       {/* --- FACE BIOMETRIC VERIFICATION (Simulation Layer) --- */}
       {isBiometricActive && (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: 2000, padding: 30, justifyContent: 'center' }]}>
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: 10000, padding: 30, justifyContent: 'center' }]}>
            <View style={{ alignItems: 'center' }}>
               <View style={{ width: 300, height: 300, borderRadius: 150, borderWidth: 4, borderColor: THEME.primary, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)' }}>
                   <CameraView 
+                     ref={biometricCameraRef}
                      style={StyleSheet.absoluteFill} 
                      facing="front"
+                     onCameraReady={() => {
+                        // FASTER VERIFICATION: Auto-capture as soon as camera is active
+                        console.log(" [BIOMETRIC] Camera Live. Fast-scanning...");
+                        setTimeout(() => {
+                           if (isBiometricActive) handleBiometricCapture();
+                        }, 800);
+                     }}
                   />
                   <View style={styles.scanLine} />
                </View>
@@ -1270,54 +1377,14 @@ export default function App() {
                <Text style={{ color: THEME.textDim, textAlign: 'center', marginTop: 15, paddingHorizontal: 30 }}>
                    RAKSHAK is currently scanning your biometric facial geometry to authenticate.
                </Text>
-              <View style={{ marginTop: 40, width: '100%' }}>
-                <TouchableOpacity 
-                    onPress={async () => {
-                      setBiometricStatus("SCANNING IDENTITY...");
-                      setTimeout(() => setBiometricStatus("Analyzing Signature..."), 800);
-                      setTimeout(async () => {
-                          try {
-                            // Generating a temporary capture signature for comparison
-                            const captureSignature = Array(128).fill(0).map(() => Math.random() * 2 - 1);
-                            
-                            if (currentScreen === 'biometric_enrollment') {
-                                // --- ENROLLMENT MODE: Capture and Store Identity ---
-                                if (authToken) {
-                                  await axios.put(`${API_BASE}/profile/update/`, { biometric_vector: captureSignature }, { headers: { Authorization: `Bearer ${authToken}` } });
-                                  setFaceVector(captureSignature); 
-                                  Alert.alert("Biometric Enrolled", "Face signature recorded correctly.");
-                                } else {
-                                  setFaceVector(captureSignature); 
-                                  Alert.alert("Biometric Enrolled", "Face signature recorded locally.");
-                                }
-                                navigate('home');
-                            } else {
-                                // --- VERIFICATION MOD: Professional Demo Mode ---
-                                // If the session's Face ID is loaded, successfully authenticate the owner.
-                                // If not loaded, it fallback to a stranger's random print which fails.
-                                const res = await axios.post(`${API_BASE}/alerts/verify-biometric/`, {
-                                  biometric_vector: faceVector || captureSignature
-                                }, { headers: { Authorization: `Bearer ${authToken}` } });
-                                
-                                if (res.data.verified) {
-                                  Alert.alert("Identity Verified", "Welcome, authorized user.");
-                                  if (isAlertActive) resolveSOSAfterVerify();
-                                  if (currentScreen === 'login') navigate('home');
-                                }
-                            }
-                            setIsBiometricActive(false);
-                          } catch (err: any) {
-                             const msg = err.response?.data?.error || "Signature Mismatch: Unauthorized Face Detected.";
-                             Alert.alert("Identification Error", msg);
-                             setIsBiometricActive(false);
-                          }
-                      }, 1500);
-                    }}
-                    style={[styles.btnPrimary, { backgroundColor: THEME.primary, marginTop: 0 }]}
-                >
-                    <Text style={[styles.btnText, { color: '#FFF' }]}>SCAN FACE IDENTITY</Text>
-                </TouchableOpacity>
-              </View>
+                <View style={{ marginTop: 40, width: '100%' }}>
+                  <TouchableOpacity 
+                      onPress={handleBiometricCapture}
+                      style={[styles.btnPrimary, { backgroundColor: THEME.primary, marginTop: 0 }]}
+                  >
+                      <Text style={[styles.btnText, { color: '#FFF' }]}>MANUAL SCAN</Text>
+                  </TouchableOpacity>
+                </View>
 
 
 
@@ -1394,6 +1461,7 @@ export default function App() {
     </View>
   );
 }
+
 
 const styles = StyleSheet.create({
   appContainer: { flex: 1, backgroundColor: '#000' },
@@ -1539,5 +1607,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20
+  },
+  testBioBtn: {
+    marginTop: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  testBioText: {
+    color: THEME.textDim,
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 8,
+    letterSpacing: 1
   }
 });
