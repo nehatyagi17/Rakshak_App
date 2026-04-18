@@ -77,7 +77,9 @@ Rakshak/
 ├── mobile/            # React Native app with "The Ear" (Audio Monitoring)
 ├── backend/           # Django API, WebSockets (Channels), and Evidence Handlers
 ├── ml/                # TFLite Training scripts & Voice Enrollment modules
-└── docs/              # Detailed Technical Documentation & Diagrams
+├── DOCUMENTATION.md   # Core system documentation
+├── SETUP.md           # Installation and environment setup
+└── flowchart.md       # Technical workflow diagrams
 ```
 
 ---
@@ -85,9 +87,14 @@ Rakshak/
 ## 📖 Deep Dive
 
 - [📘 Project Documentation](DOCUMENTATION.md) - **Full system overview, architecture, and SOS pipeline.**
-- [🚀 Installation Guide](docs/INSTALLATION_GUIDE.md) - Setup for Backend, Mobile, and Infrastructure.
-- [🔗 Connection Verification](docs/CONNECTION_VERIFICATION_REPORT.md) - API & WebSocket testing logs.
-- [📊 System Diagrams](docs/SYSTEM_DIAGRAMS.md) - Logical flows and data schemas.
+- [🚀 Installation Guide](SETUP.md) - Setup for Backend, Mobile, and Infrastructure.
+- [📊 Technical Workflow](flowchart.md) - Logical flows and data schemas.
+
+### ⚙️ Backend & API
+- [📹 Evidence API](backend/evidenceapi.md) - Secure evidence upload and management.
+- [🛡️ Safe Route Scoring](backend/safescore.md) - Heuristic-based safety pathfinding.
+- [🗺️ OSRM Configuration](backend/osrm.md) - Routing engine setup and parameters.
+- [🚀 Frontend Route Integration](backend/route-integration.md) - Leaflet.js mapping and navigation logic.
 
 ---
 
